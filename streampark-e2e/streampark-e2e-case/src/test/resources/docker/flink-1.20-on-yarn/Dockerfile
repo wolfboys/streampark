@@ -17,7 +17,7 @@
 
 FROM apache/streampark:ci as base-image
 FROM flink:1.20.1-scala_2.12-java8 as flink-image
-FROM eclipse-temurin:8-jdk-jammy as jdk8-image
+FROM eclipse-temurin:11-jdk-jammy as jdk11-image
 
 # Install streampark
 FROM sbloodys/hadoop:3.3.6
@@ -29,7 +29,7 @@ RUN sudo chown -R hadoop.hadoop /streampark \
 COPY --from=flink-image /opt/flink /flink-1.20.1
 RUN sudo chown -R hadoop.hadoop /flink-1.20.1
 
-# Bundled JDK 8 from Eclipse Temurin (avoid CentOS 7 yum mirror retirement)
-COPY --from=jdk8-image /opt/java/openjdk /usr/lib/jvm/jdk8
-ENV JAVA_HOME=/usr/lib/jvm/jdk8
+# Bundled JDK 11 from Eclipse Temurin for StreamPark Console (avoid CentOS 7 yum mirror retirement)
+COPY --from=jdk11-image /opt/java/openjdk /usr/lib/jvm/jdk11
+ENV JAVA_HOME=/usr/lib/jvm/jdk11
 ENV PATH="${JAVA_HOME}/bin:${PATH}"
