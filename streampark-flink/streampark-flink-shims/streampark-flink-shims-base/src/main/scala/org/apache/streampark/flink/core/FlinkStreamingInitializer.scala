@@ -19,7 +19,6 @@ package org.apache.streampark.flink.core
 
 import org.apache.streampark.common.conf.ConfigKeys._
 import org.apache.streampark.common.enums.ApiType
-import org.apache.streampark.common.enums.ApiType.ApiType
 import org.apache.streampark.common.util._
 import org.apache.streampark.common.util.Implicits._
 import org.apache.streampark.flink.core.conf.FlinkConfiguration
@@ -118,7 +117,7 @@ private[flink] class FlinkStreamingInitializer(args: Array[String], apiType: Api
       }
     }
 
-    val map = config match {
+    val map: Map[String, String] = config match {
       case x if x.startsWith("yaml://") => PropertiesUtils.fromYamlText(content)
       case x if x.startsWith("conf://") =>
         PropertiesUtils.fromHoconText(content)
