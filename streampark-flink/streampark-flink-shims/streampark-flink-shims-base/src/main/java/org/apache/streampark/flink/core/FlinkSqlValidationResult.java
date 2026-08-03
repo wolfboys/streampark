@@ -31,26 +31,30 @@ public class FlinkSqlValidationResult {
     private String sql;
     private String exception;
 
+    /** Default success result; mirrors the Scala case-class no-arg constructor. */
     public FlinkSqlValidationResult() {
+        // Intentionally empty: fields default to a successful validation result.
     }
 
-    public FlinkSqlValidationResult(
-                                    boolean success,
-                                    FlinkSqlValidationFailedType failedType,
-                                    int lineStart,
-                                    int lineEnd,
-                                    int errorLine,
-                                    int errorColumn,
-                                    String sql,
-                                    String exception) {
-        this.success = success;
-        this.failedType = failedType;
-        this.lineStart = lineStart;
-        this.lineEnd = lineEnd;
-        this.errorLine = errorLine;
-        this.errorColumn = errorColumn;
-        this.sql = sql;
-        this.exception = exception;
+    /** Builds a failed validation result without exposing an oversized public constructor. */
+    public static FlinkSqlValidationResult failure(
+                                                   FlinkSqlValidationFailedType failedType,
+                                                   int lineStart,
+                                                   int lineEnd,
+                                                   int errorLine,
+                                                   int errorColumn,
+                                                   String sql,
+                                                   String exception) {
+        FlinkSqlValidationResult result = new FlinkSqlValidationResult();
+        result.success = false;
+        result.failedType = failedType;
+        result.lineStart = lineStart;
+        result.lineEnd = lineEnd;
+        result.errorLine = errorLine;
+        result.errorColumn = errorColumn;
+        result.sql = sql;
+        result.exception = exception;
+        return result;
     }
 
     /** Scala field-style access. */

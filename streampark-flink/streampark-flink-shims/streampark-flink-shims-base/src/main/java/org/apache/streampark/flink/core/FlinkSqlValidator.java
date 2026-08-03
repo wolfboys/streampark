@@ -46,7 +46,7 @@ public final class FlinkSqlValidator {
         "org.apache.flink.table.planner.parse.CalciteParser";
 
     private static final Pattern SYNTAX_ERROR_PATTERN =
-        Pattern.compile(".*at\\sline\\s(\\d+),\\scolumn\\s(\\d+).*");
+        Pattern.compile("at\\sline\\s(\\d+),\\scolumn\\s(\\d+)");
 
     private static final Map<String, SqlParser.Config> SQL_PARSER_CONFIG_MAP = createSqlParserConfigMap();
 
@@ -64,84 +64,79 @@ public final class FlinkSqlValidator {
             return earlyResult;
         }
 
-        String sqlDialect = SqlDialect.DEFAULT.name().toLowerCase();
-        boolean hasInsert = false;
+        ValidationState state = new ValidationState();
         for (SqlCommandCall call : sqlCommands) {
-            String args = call.operands()[0];
-            SqlCommand command = call.command();
-            switch (command) {
-                case SET:
-                case RESET:
-                    if (command == SqlCommand.SET
-                        && args.equals(TableConfigOptions.TABLE_SQL_DIALECT.key())) {
-                        sqlDialect = call.operands()[call.operands().length - 1];
-                    }
-                    break;
-                case BEGIN_STATEMENT_SET:
-                case END_STATEMENT_SET:
-                    LOG.warn("SQL Client Syntax: " + call.command().getCommandName());
-                    break;
-                default:
-                    if (command == SqlCommand.INSERT) {
-                        hasInsert = true;
-                    }
-                    try {
-                        Class<?> calciteClass;
-                        try {
-                            calciteClass = Class.forName(FLINK112_CALCITE_PARSER_CLASS);
-                        } catch (ClassNotFoundException e) {
-                            calciteClass = Class.forName(FLINK113_PLUS_CALCITE_PARSER_CLASS);
-                        }
-                        String dialectUpper = sqlDialect.toUpperCase();
-                        if ("HIVE".equals(dialectUpper)) {
-                            // skip calcite validation for HIVE dialect
-                        } else if ("DEFAULT".equals(dialectUpper)) {
-                            Constructor<?> constructor =
-                                calciteClass.getConstructor(SqlParser.Config.class);
-                            Object parser =
-                                constructor.newInstance(
-                                    SQL_PARSER_CONFIG_MAP.get(sqlDialect.toUpperCase()));
-                            Method method = parser.getClass().getDeclaredMethod("parse", String.class);
-                            method.setAccessible(true);
-                            method.invoke(parser, call.originSql());
-                        } else {
-                            throw new UnsupportedOperationException(
-                                "unsupported dialect: " + sqlDialect);
-                        }
-                    } catch (ReflectiveOperationException e) {
-                        return syntaxErrorResult(call, e);
-                    } catch (RuntimeException e) {
-                        return syntaxErrorResult(call, e);
-                    }
-                    break;
+            FlinkSqlValidationResult failure = processCommand(call, state);
+            if (failure != null) {
+                return failure;
             }
         }
+        return state.toResult(sqlCommands);
+    }
 
-        if (hasInsert) {
-            return new FlinkSqlValidationResult();
+    private static FlinkSqlValidationResult processCommand(SqlCommandCall call, ValidationState state) {
+        SqlCommand command = call.command();
+        switch (command) {
+            case SET:
+            case RESET:
+                state.updateDialect(command, call);
+                return null;
+            case BEGIN_STATEMENT_SET:
+            case END_STATEMENT_SET:
+                LOG.warn("SQL Client Syntax: " + command.getCommandName());
+                return null;
+            default:
+                if (command == SqlCommand.INSERT) {
+                    state.markInsert();
+                }
+                try {
+                    validateSqlCommand(call, state.sqlDialect);
+                } catch (IllegalStateException | UnsupportedOperationException e) {
+                    return syntaxErrorResult(call, e);
+                }
+                return null;
         }
-        return new FlinkSqlValidationResult(
-            false,
-            FlinkSqlValidationFailedType.SYNTAX_ERROR,
-            sqlCommands.get(0).lineStart(),
-            sqlCommands.get(sqlCommands.size() - 1).lineEnd(),
-            0,
-            0,
-            null,
-            "No 'INSERT' statement to trigger the execution of the Flink job.");
+    }
+
+    private static void validateSqlCommand(SqlCommandCall call, String sqlDialect) {
+        if ("HIVE".equalsIgnoreCase(sqlDialect)) {
+            return;
+        }
+        if (!"DEFAULT".equalsIgnoreCase(sqlDialect)) {
+            throw new UnsupportedOperationException("unsupported dialect: " + sqlDialect);
+        }
+        try {
+            Class<?> calciteClass = resolveCalciteParserClass();
+            Constructor<?> constructor = calciteClass.getConstructor(SqlParser.Config.class);
+            Object parser =
+                constructor.newInstance(SQL_PARSER_CONFIG_MAP.get(sqlDialect.toUpperCase()));
+            Method method = parser.getClass().getDeclaredMethod("parse", String.class);
+            method.setAccessible(true);
+            method.invoke(parser, call.originSql());
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to parse SQL with Calcite", e);
+        }
+    }
+
+    private static Class<?> resolveCalciteParserClass() throws ClassNotFoundException {
+        try {
+            return Class.forName(FLINK112_CALCITE_PARSER_CLASS);
+        } catch (ClassNotFoundException e) {
+            return Class.forName(FLINK113_PLUS_CALCITE_PARSER_CLASS);
+        }
     }
 
     private static FlinkSqlValidationResult syntaxErrorResult(SqlCommandCall call, Throwable e) {
         String exception = ExceptionUtils.stringifyException(e);
-        String causedBy = exception.substring(exception.indexOf("Caused by:"));
+        int causedByIndex = exception.indexOf("Caused by:");
+        String causedBy = causedByIndex >= 0 ? exception.substring(causedByIndex) : exception;
         String cleanUpError = exception.replaceAll("[\r\n]", "");
         Matcher matcher = SYNTAX_ERROR_PATTERN.matcher(cleanUpError);
-        if (matcher.matches()) {
+        if (matcher.find()) {
             int line = Integer.parseInt(matcher.group(1));
             int column = Integer.parseInt(matcher.group(2));
             int errorLine = call.lineStart() + line - 1;
-            return new FlinkSqlValidationResult(
-                false,
+            return FlinkSqlValidationResult.failure(
                 FlinkSqlValidationFailedType.SYNTAX_ERROR,
                 call.lineStart(),
                 call.lineEnd(),
@@ -150,8 +145,7 @@ public final class FlinkSqlValidator {
                 call.originSql(),
                 causedBy.replaceAll("at\\sline\\s" + line, "at line " + errorLine));
         }
-        return new FlinkSqlValidationResult(
-            false,
+        return FlinkSqlValidationResult.failure(
             FlinkSqlValidationFailedType.SYNTAX_ERROR,
             call.lineStart(),
             call.lineEnd(),
@@ -169,16 +163,8 @@ public final class FlinkSqlValidator {
     }
 
     private static SqlParser.Config getConfig(SqlDialect sqlDialect) {
-        org.apache.calcite.sql.validate.SqlConformance conformance;
-        if (sqlDialect == SqlDialect.HIVE) {
-            try {
-                conformance = FlinkSqlConformance.DEFAULT;
-            } catch (NoSuchFieldError e) {
-                conformance = FlinkSqlConformance.DEFAULT;
-            }
-        } else if (sqlDialect == SqlDialect.DEFAULT) {
-            conformance = FlinkSqlConformance.DEFAULT;
-        } else {
+        org.apache.calcite.sql.validate.SqlConformance conformance = FlinkSqlConformance.DEFAULT;
+        if (sqlDialect != SqlDialect.DEFAULT && sqlDialect != SqlDialect.HIVE) {
             throw new UnsupportedOperationException("Unsupported sqlDialect: " + sqlDialect);
         }
         return SqlParser.config()
@@ -186,6 +172,37 @@ public final class FlinkSqlValidator {
             .withConformance(conformance)
             .withLex(Lex.JAVA)
             .withIdentifierMaxLength(256);
+    }
+
+    private static final class ValidationState {
+
+        private String sqlDialect = SqlDialect.DEFAULT.name().toLowerCase();
+        private boolean hasInsert;
+
+        private void updateDialect(SqlCommand command, SqlCommandCall call) {
+            if (command == SqlCommand.SET
+                && call.operands()[0].equals(TableConfigOptions.TABLE_SQL_DIALECT.key())) {
+                sqlDialect = call.operands()[call.operands().length - 1];
+            }
+        }
+
+        private void markInsert() {
+            hasInsert = true;
+        }
+
+        private FlinkSqlValidationResult toResult(List<SqlCommandCall> sqlCommands) {
+            if (hasInsert) {
+                return new FlinkSqlValidationResult();
+            }
+            return FlinkSqlValidationResult.failure(
+                FlinkSqlValidationFailedType.SYNTAX_ERROR,
+                sqlCommands.get(0).lineStart(),
+                sqlCommands.get(sqlCommands.size() - 1).lineEnd(),
+                0,
+                0,
+                null,
+                "No 'INSERT' statement to trigger the execution of the Flink job.");
+        }
     }
 
     private static final class Log extends org.apache.streampark.common.util.LoggerSupport {

@@ -18,12 +18,7 @@
 package org.apache.streampark.flink.core;
 
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.table.api.CompiledPlan;
-import org.apache.flink.table.api.PlanReference;
-import org.apache.flink.table.api.Table;
-import org.apache.flink.table.api.TableDescriptor;
 import org.apache.flink.table.api.TableEnvironment;
-import org.apache.flink.table.module.ModuleEntry;
 
 import scala.Tuple2;
 
@@ -40,48 +35,4 @@ public class TableContext extends FlinkTableTrait {
     public TableContext(TableEnvConfig args) {
         this(FlinkTableInitializer.initialize(args));
     }
-
-    @Override
-    public void useModules(String... strings) {
-        delegate().useModules(strings);
-    }
-
-    @Override
-    public void createTemporaryTable(String path, TableDescriptor descriptor) {
-        delegate().createTemporaryTable(path, descriptor);
-    }
-
-    @Override
-    public void createTable(String path, TableDescriptor descriptor) {
-        delegate().createTable(path, descriptor);
-    }
-
-    @Override
-    public Table from(TableDescriptor tableDescriptor) {
-        return delegate().from(tableDescriptor);
-    }
-
-    @Override
-    public ModuleEntry[] listFullModules() {
-        return delegate().listFullModules();
-    }
-
-    /** @since 1.15 */
-    @Override
-    public String[] listTables(String catalogName, String databaseName) {
-        return delegate().listTables(catalogName, databaseName);
-    }
-
-    /** @since 1.15 */
-    @Override
-    public CompiledPlan loadPlan(PlanReference planReference) {
-        return delegate().loadPlan(planReference);
-    }
-
-    /** @since 1.15 */
-    @Override
-    public CompiledPlan compilePlanSql(String stmt) {
-        return delegate().compilePlanSql(stmt);
-    }
-
 }

@@ -45,12 +45,19 @@ import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.graph.StreamGraph;
 import org.apache.flink.streaming.api.scala.DataStream;
 import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment;
+import org.apache.flink.table.api.CompiledPlan;
 import org.apache.flink.table.api.ExplainDetail;
+import org.apache.flink.table.api.ExplainFormat;
+import org.apache.flink.table.api.PlanReference;
+import org.apache.flink.table.api.Schema;
 import org.apache.flink.table.api.Table;
 import org.apache.flink.table.api.TableConfig;
+import org.apache.flink.table.api.TableDescriptor;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.table.api.bridge.scala.StreamTableEnvironment;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.CatalogDescriptor;
+import org.apache.flink.table.connector.ChangelogMode;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.functions.AggregateFunction;
 import org.apache.flink.table.functions.ScalarFunction;
@@ -58,7 +65,10 @@ import org.apache.flink.table.functions.TableAggregateFunction;
 import org.apache.flink.table.functions.TableFunction;
 import org.apache.flink.table.functions.UserDefinedFunction;
 import org.apache.flink.table.module.Module;
+import org.apache.flink.table.module.ModuleEntry;
+import org.apache.flink.table.resource.ResourceUri;
 import org.apache.flink.table.types.AbstractDataType;
+import org.apache.flink.types.Row;
 import org.apache.flink.util.SplittableIterator;
 
 import com.esotericsoftware.kryo.Serializer;
@@ -73,7 +83,10 @@ import scala.collection.Seq;
 import scala.runtime.BoxedUnit;
 
 /**
- * Integration api of stream and table
+ * Integration api of stream and table.
+ *
+ * <p>Methods prefixed with {@code $} implement the Flink Scala {@code StreamTableEnvironment} API
+ * and retain Scala-compatible names required by that interface.
  */
 public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
 
@@ -114,7 +127,6 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
         return execute(appName);
     }
 
-    @Deprecated
     public JobExecutionResult execute(String jobName) {
         Utils.printLogo("FlinkStreamTable " + jobName + " Starting...");
         if (isConvertedToDataStream) {
@@ -366,7 +378,6 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
         return streamEnv.isForceUnalignedCheckpoints();
     }
 
-    @Deprecated
     public StreamExecutionEnvironment $enableCheckpointing(
                                                            long interval,
                                                            CheckpointingMode mode,
@@ -374,17 +385,14 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
         return streamEnv.enableCheckpointing(interval, mode, force);
     }
 
-    @Deprecated
     public StreamExecutionEnvironment $enableCheckpointing() {
         return streamEnv.enableCheckpointing();
     }
 
-    @Deprecated
     public DataStream<Object> $generateSequence(long from, long to) {
         return streamEnv.generateSequence(from, to);
     }
 
-    @Deprecated
     public DataStream<String> $readFileStream(
                                               String streamPath,
                                               long intervalMillis,
@@ -392,7 +400,6 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
         return streamEnv.readFileStream(streamPath, intervalMillis, watchType);
     }
 
-    @Deprecated
     public <T> DataStream<T> $readFile(
                                        FileInputFormat<T> inputFormat,
                                        String filePath,
@@ -414,6 +421,26 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
     }
 
     @Override
+    public <T> Table fromDataStream(DataStream<T> dataStream, Schema schema) {
+        return tableEnv.fromDataStream(dataStream, schema);
+    }
+
+    @Override
+    public Table fromChangelogStream(DataStream<Row> dataStream) {
+        return tableEnv.fromChangelogStream(dataStream);
+    }
+
+    @Override
+    public Table fromChangelogStream(DataStream<Row> dataStream, Schema schema) {
+        return tableEnv.fromChangelogStream(dataStream, schema);
+    }
+
+    @Override
+    public Table fromChangelogStream(DataStream<Row> dataStream, Schema schema, ChangelogMode changelogMode) {
+        return tableEnv.fromChangelogStream(dataStream, schema, changelogMode);
+    }
+
+    @Override
     public <T> void createTemporaryView(String path, DataStream<T> dataStream) {
         tableEnv.createTemporaryView(path, dataStream);
     }
@@ -421,6 +448,47 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
     @Override
     public <T> void createTemporaryView(String path, DataStream<T> dataStream, Seq<Expression> fields) {
         tableEnv.createTemporaryView(path, dataStream, fields);
+    }
+
+    @Override
+    public <T> void createTemporaryView(String path, DataStream<T> dataStream, Schema schema) {
+        tableEnv.createTemporaryView(path, dataStream, schema);
+    }
+
+    @Override
+    public DataStream<Row> toDataStream(Table table) {
+        isConvertedToDataStream = true;
+        return tableEnv.toDataStream(table);
+    }
+
+    @Override
+    public <T> DataStream<T> toDataStream(Table table, Class<T> targetClass) {
+        isConvertedToDataStream = true;
+        return tableEnv.toDataStream(table, targetClass);
+    }
+
+    @Override
+    public <T> DataStream<T> toDataStream(Table table, AbstractDataType<?> targetDataType) {
+        isConvertedToDataStream = true;
+        return tableEnv.toDataStream(table, targetDataType);
+    }
+
+    @Override
+    public DataStream<Row> toChangelogStream(Table table) {
+        isConvertedToDataStream = true;
+        return tableEnv.toChangelogStream(table);
+    }
+
+    @Override
+    public DataStream<Row> toChangelogStream(Table table, Schema targetSchema) {
+        isConvertedToDataStream = true;
+        return tableEnv.toChangelogStream(table, targetSchema);
+    }
+
+    @Override
+    public DataStream<Row> toChangelogStream(Table table, Schema targetSchema, ChangelogMode changelogMode) {
+        isConvertedToDataStream = true;
+        return tableEnv.toChangelogStream(table, targetSchema, changelogMode);
     }
 
     @Override
@@ -630,65 +698,127 @@ public abstract class FlinkStreamTableTrait implements StreamTableEnvironment {
         return tableEnv.getConfig();
     }
 
-    @Deprecated
     @Override
     public <T> void registerFunction(String name, TableFunction<T> tf, TypeInformation<T> typeInfo) {
         tableEnv.registerFunction(name, tf, typeInfo);
     }
 
-    @Deprecated
     @Override
-    public <T, ACC> void registerFunction(
-                                          String name,
-                                          AggregateFunction<T, ACC> f,
-                                          TypeInformation<T> typeInfo1,
-                                          TypeInformation<ACC> typeInfo2) {
+    public <T, A> void registerFunction(
+                                        String name,
+                                        AggregateFunction<T, A> f,
+                                        TypeInformation<T> typeInfo1,
+                                        TypeInformation<A> typeInfo2) {
         tableEnv.registerFunction(name, f, typeInfo1, typeInfo2);
     }
 
-    @Deprecated
     @Override
-    public <T, ACC> void registerFunction(
-                                          String name,
-                                          TableAggregateFunction<T, ACC> f,
-                                          TypeInformation<T> typeInfo1,
-                                          TypeInformation<ACC> typeInfo2) {
+    public <T, A> void registerFunction(
+                                        String name,
+                                        TableAggregateFunction<T, A> f,
+                                        TypeInformation<T> typeInfo1,
+                                        TypeInformation<A> typeInfo2) {
         tableEnv.registerFunction(name, f, typeInfo1, typeInfo2);
     }
 
-    @Deprecated
     @Override
     public <T> void registerDataStream(String name, DataStream<T> dataStream) {
         tableEnv.registerDataStream(name, dataStream);
     }
 
-    @Deprecated
     @Override
     public <T> void registerDataStream(String name, DataStream<T> dataStream, Seq<Expression> fields) {
         tableEnv.registerDataStream(name, dataStream, fields);
     }
 
-    @Deprecated
     @Override
     public void registerFunction(String name, ScalarFunction function) {
         tableEnv.registerFunction(name, function);
     }
 
-    @Deprecated
     @Override
     public void registerTable(String name, Table table) {
         tableEnv.registerTable(name, table);
     }
 
-    @Deprecated
     @Override
     public Table scan(String... tablePath) {
         return tableEnv.scan(tablePath);
     }
 
-    @Deprecated
     @Override
     public String[] getCompletionHints(String statement, int position) {
         return tableEnv.getCompletionHints(statement, position);
+    }
+
+    @Override
+    public void useModules(String... modules) {
+        tableEnv.useModules(modules);
+    }
+
+    @Override
+    public ModuleEntry[] listFullModules() {
+        return tableEnv.listFullModules();
+    }
+
+    @Override
+    public void createTemporaryTable(String path, TableDescriptor descriptor) {
+        tableEnv.createTemporaryTable(path, descriptor);
+    }
+
+    @Override
+    public void createTable(String path, TableDescriptor descriptor) {
+        tableEnv.createTable(path, descriptor);
+    }
+
+    @Override
+    public Table from(TableDescriptor descriptor) {
+        return tableEnv.from(descriptor);
+    }
+
+    @Override
+    public String[] listTables(String catalogName, String databaseName) {
+        return tableEnv.listTables(catalogName, databaseName);
+    }
+
+    @Override
+    public CompiledPlan loadPlan(PlanReference planReference) {
+        return tableEnv.loadPlan(planReference);
+    }
+
+    @Override
+    public CompiledPlan compilePlanSql(String stmt) {
+        return tableEnv.compilePlanSql(stmt);
+    }
+
+    @Override
+    public void createFunction(String path, String className, List<ResourceUri> resourceUris) {
+        tableEnv.createFunction(path, className, resourceUris);
+    }
+
+    @Override
+    public void createFunction(
+                               String path, String className, List<ResourceUri> resourceUris, boolean ignoreIfExists) {
+        tableEnv.createFunction(path, className, resourceUris, ignoreIfExists);
+    }
+
+    @Override
+    public void createTemporaryFunction(String path, String className, List<ResourceUri> resourceUris) {
+        tableEnv.createTemporaryFunction(path, className, resourceUris);
+    }
+
+    @Override
+    public void createTemporarySystemFunction(String name, String className, List<ResourceUri> resourceUris) {
+        tableEnv.createTemporarySystemFunction(name, className, resourceUris);
+    }
+
+    @Override
+    public String explainSql(String statement, ExplainFormat format, ExplainDetail... extraDetails) {
+        return tableEnv.explainSql(statement, format, extraDetails);
+    }
+
+    @Override
+    public void createCatalog(String catalog, CatalogDescriptor catalogDescriptor) {
+        tableEnv.createCatalog(catalog, catalogDescriptor);
     }
 }

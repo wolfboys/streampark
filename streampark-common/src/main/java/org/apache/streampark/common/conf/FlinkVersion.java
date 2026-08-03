@@ -23,15 +23,14 @@ import org.apache.streampark.shaded.org.slf4j.Logger;
 
 import java.io.File;
 import java.io.Serializable;
+import java.net.MalformedURLException;
 import java.net.URL;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
-import java.util.function.Consumer;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
-
-import scala.collection.JavaConverters;
 
 /** @param flinkHome actual flink home that must be a readable local path */
 public class FlinkVersion implements Serializable {
@@ -85,11 +84,6 @@ public class FlinkVersion implements Serializable {
         return getVersion();
     }
 
-    /** Scala API alias for {@link #getFlinkLibs()}. */
-    public scala.collection.immutable.List<URL> flinkLibs() throws Exception {
-        return JavaConverters.asScalaIteratorConverter(getFlinkLibs().iterator()).asScala().toList();
-    }
-
     public String getScalaVersion() {
         if (scalaVersion == null) {
             Matcher matcher = FLINK_SCALA_VERSION_PATTERN.matcher(getFlinkDistJar().getName());
@@ -123,13 +117,13 @@ public class FlinkVersion implements Serializable {
     public List<URL> getFlinkLibs() throws Exception {
         File[] files = getFlinkLib().listFiles();
         if (files == null) {
-            return Arrays.asList();
+            return Collections.emptyList();
         }
         return Arrays.stream(files).map(f -> {
             try {
                 return f.toURI().toURL();
-            } catch (Exception e) {
-                throw new RuntimeException(e);
+            } catch (MalformedURLException e) {
+                throw new IllegalArgumentException("Invalid Flink lib URL: " + f, e);
             }
         }).collect(Collectors.toList());
     }
@@ -147,22 +141,18 @@ public class FlinkVersion implements Serializable {
                 CommandUtils.execute(
                     getFlinkLib().getAbsolutePath(),
                     cmd,
-                    new Consumer<String>() {
-
-                        @Override
-                        public void accept(String out) {
-                            buffer.append(out).append("\n");
-                            Matcher matcher = FLINK_VERSION_PATTERN.matcher(out);
-                            if (matcher.find()) {
-                                String ver = matcher.group(1);
-                                Matcher m1 = APACHE_FLINK_VERSION_PATTERN.matcher(ver);
-                                if (m1.find()) {
+                    out -> {
+                        buffer.append(out).append("\n");
+                        Matcher matcher = FLINK_VERSION_PATTERN.matcher(out);
+                        if (matcher.find()) {
+                            String ver = matcher.group(1);
+                            Matcher m1 = APACHE_FLINK_VERSION_PATTERN.matcher(ver);
+                            if (m1.find()) {
+                                flinkVersion[0] = ver;
+                            } else {
+                                Matcher m2 = OTHER_FLINK_VERSION_PATTERN.matcher(ver);
+                                if (m2.find()) {
                                     flinkVersion[0] = ver;
-                                } else {
-                                    Matcher m2 = OTHER_FLINK_VERSION_PATTERN.matcher(ver);
-                                    if (m2.find()) {
-                                        flinkVersion[0] = ver;
-                                    }
                                 }
                             }
                         }

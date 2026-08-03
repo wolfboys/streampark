@@ -25,9 +25,9 @@ import org.apache.commons.cli.DefaultParser;
 import org.apache.commons.cli.Options;
 import org.apache.commons.cli.ParseException;
 
+import java.io.PrintStream;
 import java.net.URLClassLoader;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -46,37 +46,39 @@ public final class ParameterCli {
     }
 
     public static void main(String[] args) {
-        System.out.print(read(args));
+        emit(read(args), System.out);
+    }
+
+    static void emit(String output, PrintStream out) {
+        out.print(output);
     }
 
     public static String read(String[] args) {
-        switch (args[0]) {
-            case "--vmopt":
-                ClassLoader loader = ClassLoader.getSystemClassLoader();
-                if (loader instanceof URLClassLoader) {
-                    return "";
-                }
-                return "--add-opens java.base/jdk.internal.loader=ALL-UNNAMED "
-                    + "--add-opens jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED";
+        if ("--vmopt".equals(args[0])) {
+            ClassLoader loader = ClassLoader.getSystemClassLoader();
+            if (loader instanceof URLClassLoader) {
+                return "";
+            }
+            return "--add-opens java.base/jdk.internal.loader=ALL-UNNAMED "
+                + "--add-opens jdk.zipfs/jdk.nio.zipfs=ALL-UNNAMED";
+        }
+        String action = args[0];
+        String conf = args[1];
+        Map<String, String> map = loadConfig(conf);
+        String[] programArgs = new String[args.length - 2];
+        System.arraycopy(args, 2, programArgs, 0, programArgs.length);
+        switch (action) {
+            case "--option":
+                return buildOption(map, programArgs);
+            case "--property":
+                return buildProperty(map);
+            case "--name":
+                return map.getOrDefault(
+                    PROPERTY_PREFIX + ConfigKeys.KEY_FLINK_APP_NAME(), "").trim();
+            case "--detached":
+                return buildDetachedMode(map, programArgs);
             default:
-                String action = args[0];
-                String conf = args[1];
-                Map<String, String> map = loadConfig(conf);
-                String[] programArgs = new String[args.length - 2];
-                System.arraycopy(args, 2, programArgs, 0, programArgs.length);
-                switch (action) {
-                    case "--option":
-                        return buildOption(map, programArgs);
-                    case "--property":
-                        return buildProperty(map);
-                    case "--name":
-                        return map.getOrDefault(
-                            PROPERTY_PREFIX + ConfigKeys.KEY_FLINK_APP_NAME(), "").trim();
-                    case "--detached":
-                        return buildDetachedMode(map, programArgs);
-                    default:
-                        return null;
-                }
+                return null;
         }
     }
 
@@ -96,7 +98,8 @@ public final class ParameterCli {
                         "[StreamPark] Usage:flink.conf file error,must be (yml|conf|properties)");
             }
         } catch (Exception e) {
-            return Collections.emptyMap();
+            throw new IllegalArgumentException(
+                "[StreamPark] Failed to load flink config file: " + conf, e);
         }
     }
 
@@ -112,7 +115,7 @@ public final class ParameterCli {
                 }
             }
         } catch (ParseException exception) {
-            exception.printStackTrace();
+            // Ignore unrecognized CLI tokens; valid options are still collected below.
         }
         String mainClass = map.get(OPTION_MAIN);
         if (mainClass != null) {
@@ -151,12 +154,18 @@ public final class ParameterCli {
                     || line.hasOption(FlinkRunOption.DETACHED_OPTION.getLongOpt());
             return detached ? "Detached" : "Attach";
         } catch (ParseException e) {
-            throw new RuntimeException(e);
+            throw new IllegalArgumentException("Failed to parse Flink detached mode options", e);
         }
     }
 
     public static String[] getOption(Map<String, String> map, String[] args) {
         Map<String, Object> optionMap = new LinkedHashMap<>();
+        mergeConfigOptions(map, optionMap);
+        mergeProgramOptions(args, optionMap);
+        return flattenOptions(optionMap);
+    }
+
+    private static void mergeConfigOptions(Map<String, String> map, Map<String, Object> optionMap) {
         map.entrySet().stream()
             .filter(x -> x.getKey().startsWith(OPTION_PREFIX))
             .filter(x -> x.getValue() != null && !x.getValue().isEmpty())
@@ -175,22 +184,27 @@ public final class ParameterCli {
                         optionMap.put(optKey, value);
                     }
                 });
+    }
 
-        if (args.length > 0) {
-            try {
-                CommandLine line = PARSER.parse(FLINK_OPTIONS, args, false);
-                for (org.apache.commons.cli.Option x : line.getOptions()) {
-                    if (x.hasArg()) {
-                        optionMap.put("-" + x.getLongOpt().trim(), x.getValue());
-                    } else {
-                        optionMap.put("-" + x.getLongOpt().trim(), true);
-                    }
-                }
-            } catch (ParseException e) {
-                e.printStackTrace();
-            }
+    private static void mergeProgramOptions(String[] args, Map<String, Object> optionMap) {
+        if (args.length == 0) {
+            return;
         }
+        try {
+            CommandLine line = PARSER.parse(FLINK_OPTIONS, args, false);
+            for (org.apache.commons.cli.Option x : line.getOptions()) {
+                if (x.hasArg()) {
+                    optionMap.put("-" + x.getLongOpt().trim(), x.getValue());
+                } else {
+                    optionMap.put("-" + x.getLongOpt().trim(), true);
+                }
+            }
+        } catch (ParseException e) {
+            // Ignore unrecognized CLI tokens merged from program arguments.
+        }
+    }
 
+    private static String[] flattenOptions(Map<String, Object> optionMap) {
         List<String> array = new ArrayList<>();
         optionMap.forEach(
             (key, value) -> {
