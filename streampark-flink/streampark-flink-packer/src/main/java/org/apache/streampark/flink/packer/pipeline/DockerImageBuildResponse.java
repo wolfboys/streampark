@@ -23,13 +23,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Map;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class DockerImageBuildResponse implements FlinkBuildResult {
+public class DockerImageBuildResponse extends AbstractFlinkBuildResponse {
 
-    private String workspacePath;
     private String flinkImageTag;
     private Map<String, String> podTemplatePaths;
     private String dockerInnerMainJarPath;
-    private boolean pass = true;
 
     public DockerImageBuildResponse() {
     }
@@ -48,16 +46,10 @@ public class DockerImageBuildResponse implements FlinkBuildResult {
                                     Map<String, String> podTemplatePaths,
                                     String dockerInnerMainJarPath,
                                     boolean pass) {
-        this.workspacePath = workspacePath;
+        super(workspacePath, pass);
         this.flinkImageTag = flinkImageTag;
         this.podTemplatePaths = podTemplatePaths;
         this.dockerInnerMainJarPath = dockerInnerMainJarPath;
-        this.pass = pass;
-    }
-
-    @Override
-    public String workspacePath() {
-        return workspacePath;
     }
 
     public String flinkImageTag() {
@@ -70,16 +62,6 @@ public class DockerImageBuildResponse implements FlinkBuildResult {
 
     public String dockerInnerMainJarPath() {
         return dockerInnerMainJarPath;
-    }
-
-    @Override
-    public boolean pass() {
-        return pass;
-    }
-
-    @JsonProperty("workspacePath")
-    public void setWorkspacePath(String workspacePath) {
-        this.workspacePath = workspacePath;
     }
 
     @JsonProperty("flinkImageTag")
@@ -97,15 +79,10 @@ public class DockerImageBuildResponse implements FlinkBuildResult {
         this.dockerInnerMainJarPath = dockerInnerMainJarPath;
     }
 
-    @JsonProperty("pass")
-    public void setPass(boolean pass) {
-        this.pass = pass;
-    }
-
     @Override
     public String toString() {
         return "{ workspacePath: "
-            + workspacePath
+            + workspacePath()
             + ", flinkImageTag: "
             + flinkImageTag
             + ", podTemplatePaths: "
@@ -113,7 +90,7 @@ public class DockerImageBuildResponse implements FlinkBuildResult {
             + ", dockerInnerMainJarPath: "
             + dockerInnerMainJarPath
             + ", pass: "
-            + pass
+            + pass()
             + " }";
     }
 }

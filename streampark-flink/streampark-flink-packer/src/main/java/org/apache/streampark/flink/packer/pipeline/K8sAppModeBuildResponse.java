@@ -23,13 +23,11 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.Set;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class K8sAppModeBuildResponse implements FlinkBuildResult {
+public class K8sAppModeBuildResponse extends AbstractFlinkBuildResponse {
 
-    private String workspacePath;
     private String flinkBaseImage;
     private String mainJarPath;
     private Set<String> extraLibJarPaths;
-    private boolean pass = false;
 
     public K8sAppModeBuildResponse() {
     }
@@ -40,16 +38,10 @@ public class K8sAppModeBuildResponse implements FlinkBuildResult {
                                    String mainJarPath,
                                    Set<String> extraLibJarPaths,
                                    boolean pass) {
-        this.workspacePath = workspacePath;
+        super(workspacePath, pass);
         this.flinkBaseImage = flinkBaseImage;
         this.mainJarPath = mainJarPath;
         this.extraLibJarPaths = extraLibJarPaths;
-        this.pass = pass;
-    }
-
-    @Override
-    public String workspacePath() {
-        return workspacePath;
     }
 
     public String flinkBaseImage() {
@@ -62,16 +54,6 @@ public class K8sAppModeBuildResponse implements FlinkBuildResult {
 
     public Set<String> extraLibJarPaths() {
         return extraLibJarPaths;
-    }
-
-    @Override
-    public boolean pass() {
-        return pass;
-    }
-
-    @JsonProperty("workspacePath")
-    public void setWorkspacePath(String workspacePath) {
-        this.workspacePath = workspacePath;
     }
 
     @JsonProperty("flinkBaseImage")
@@ -89,15 +71,10 @@ public class K8sAppModeBuildResponse implements FlinkBuildResult {
         this.extraLibJarPaths = extraLibJarPaths;
     }
 
-    @JsonProperty("pass")
-    public void setPass(boolean pass) {
-        this.pass = pass;
-    }
-
     @Override
     public String toString() {
         return "{ workspacePath: "
-            + workspacePath
+            + workspacePath()
             + ", flinkBaseImage: "
             + flinkBaseImage
             + ", mainJarPath: "
@@ -105,7 +82,7 @@ public class K8sAppModeBuildResponse implements FlinkBuildResult {
             + ", extraLibJarPaths: "
             + extraLibJarPaths
             + ", pass: "
-            + pass
+            + pass()
             + " }";
     }
 }

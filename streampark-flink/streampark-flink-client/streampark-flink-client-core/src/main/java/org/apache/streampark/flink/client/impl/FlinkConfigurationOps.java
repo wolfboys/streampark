@@ -15,22 +15,21 @@
  * limitations under the License.
  */
 
-package org.apache.streampark.flink.packer.pipeline;
+package org.apache.streampark.flink.client.impl;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import org.apache.flink.configuration.ConfigOption;
+import org.apache.flink.configuration.Configuration;
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-public class SimpleBuildResponse extends AbstractFlinkBuildResponse {
+/** Configuration helpers mirroring {@code FlinkClientTrait.EnhanceFlinkConfiguration#safeSet}. */
+final class FlinkConfigurationOps {
 
-    public SimpleBuildResponse() {
+    private FlinkConfigurationOps() {
     }
 
-    public SimpleBuildResponse(String workspacePath, boolean pass) {
-        super(workspacePath, pass);
-    }
-
-    @Override
-    public String toString() {
-        return "{ workspacePath: " + workspacePath() + ", pass: " + pass() + " }";
+    static <T> Configuration safeSet(Configuration flinkConfig, ConfigOption<T> option, T value) {
+        if (value != null && !value.toString().isEmpty()) {
+            flinkConfig.set(option, value);
+        }
+        return flinkConfig;
     }
 }

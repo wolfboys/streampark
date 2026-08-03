@@ -21,42 +21,24 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class ShadedBuildResponse implements FlinkBuildResult {
+public class ShadedBuildResponse extends AbstractFlinkBuildResponse {
 
-    private String workspacePath;
     private String shadedJarPath;
-    private boolean pass = true;
 
     public ShadedBuildResponse(String workspacePath, String shadedJarPath) {
         this(workspacePath, shadedJarPath, true);
     }
 
     public ShadedBuildResponse(String workspacePath, String shadedJarPath, boolean pass) {
-        this.workspacePath = workspacePath;
+        super(workspacePath, pass);
         this.shadedJarPath = shadedJarPath;
-        this.pass = pass;
     }
 
     public ShadedBuildResponse() {
     }
 
-    @Override
-    public String workspacePath() {
-        return workspacePath;
-    }
-
     public String shadedJarPath() {
         return shadedJarPath;
-    }
-
-    @Override
-    public boolean pass() {
-        return pass;
-    }
-
-    @JsonProperty("workspacePath")
-    public void setWorkspacePath(String workspacePath) {
-        this.workspacePath = workspacePath;
     }
 
     @JsonProperty("shadedJarPath")
@@ -64,19 +46,14 @@ public class ShadedBuildResponse implements FlinkBuildResult {
         this.shadedJarPath = shadedJarPath;
     }
 
-    @JsonProperty("pass")
-    public void setPass(boolean pass) {
-        this.pass = pass;
-    }
-
     @Override
     public String toString() {
         return "{ workspacePath: "
-            + workspacePath
+            + workspacePath()
             + ", shadedJarPath: "
             + shadedJarPath
             + ", pass: "
-            + pass
+            + pass()
             + " }";
     }
 }

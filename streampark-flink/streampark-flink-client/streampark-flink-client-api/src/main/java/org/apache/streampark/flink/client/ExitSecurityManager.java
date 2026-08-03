@@ -15,22 +15,23 @@
  * limitations under the License.
  */
 
-package org.apache.streampark.flink.packer.pipeline;
+package org.apache.streampark.flink.client;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.security.Permission;
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-public class SimpleBuildResponse extends AbstractFlinkBuildResponse {
+/** Used to mask JVM requests for external operations. */
+public class ExitSecurityManager extends SecurityManager {
 
-    public SimpleBuildResponse() {
-    }
-
-    public SimpleBuildResponse(String workspacePath, boolean pass) {
-        super(workspacePath, pass);
+    @Override
+    public void checkExit(int status) {
+        throw new SecurityException(
+            "System.exit("
+                + status
+                + ") was called in your flink job, The job has been stopped, please check your program...");
     }
 
     @Override
-    public String toString() {
-        return "{ workspacePath: " + workspacePath() + ", pass: " + pass() + " }";
+    public void checkPermission(Permission perm) {
+        // no-op
     }
 }

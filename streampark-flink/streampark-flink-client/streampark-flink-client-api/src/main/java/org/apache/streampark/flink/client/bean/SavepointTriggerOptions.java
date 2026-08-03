@@ -15,22 +15,28 @@
  * limitations under the License.
  */
 
-package org.apache.streampark.flink.packer.pipeline;
+package org.apache.streampark.flink.client.bean;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.io.Serializable;
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-public class SimpleBuildResponse extends AbstractFlinkBuildResponse {
+/** Savepoint trigger options for savepoint requests. */
+public final class SavepointTriggerOptions implements Serializable {
 
-    public SimpleBuildResponse() {
+    private static final long serialVersionUID = 1L;
+
+    private final String savepointPath;
+    private final boolean nativeFormat;
+
+    public SavepointTriggerOptions(String savepointPath, boolean nativeFormat) {
+        this.savepointPath = savepointPath;
+        this.nativeFormat = nativeFormat;
     }
 
-    public SimpleBuildResponse(String workspacePath, boolean pass) {
-        super(workspacePath, pass);
+    public String savepointPath() {
+        return savepointPath;
     }
 
-    @Override
-    public String toString() {
-        return "{ workspacePath: " + workspacePath() + ", pass: " + pass() + " }";
+    public boolean nativeFormat() {
+        return nativeFormat;
     }
 }

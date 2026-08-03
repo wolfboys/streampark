@@ -15,22 +15,27 @@
  * limitations under the License.
  */
 
-package org.apache.streampark.flink.packer.pipeline;
+package org.apache.streampark.flink.client.bean;
 
-import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import org.apache.streampark.common.conf.FlinkVersion;
+import org.apache.streampark.common.enums.FlinkDeployMode;
 
-@JsonIgnoreProperties(ignoreUnknown = true)
-public class SimpleBuildResponse extends AbstractFlinkBuildResponse {
+import javax.annotation.Nullable;
 
-    public SimpleBuildResponse() {
-    }
+import java.util.Map;
 
-    public SimpleBuildResponse(String workspacePath, boolean pass) {
-        super(workspacePath, pass);
-    }
+public interface DeployRequestTrait {
 
-    @Override
-    public String toString() {
-        return "{ workspacePath: " + workspacePath() + ", pass: " + pass() + " }";
-    }
+    FlinkVersion flinkVersion();
+
+    FlinkDeployMode deployMode();
+
+    Map<String, Object> properties();
+
+    String clusterId();
+
+    long id();
+
+    @Nullable
+    KubernetesDeployParam k8sParam();
 }
