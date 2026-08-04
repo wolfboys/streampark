@@ -65,4 +65,13 @@
         </dependency>
     </dependencies>
 
+    <profiles>
+        <profile>
+            <id>connector</id>
+            <modules>
+                <module>streampark-flink-connector</module>
+            </modules>
+        </profile>
+    </profiles>
+
 </project>

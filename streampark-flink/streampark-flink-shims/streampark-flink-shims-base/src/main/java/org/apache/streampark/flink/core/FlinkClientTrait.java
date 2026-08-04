@@ -23,6 +23,7 @@ import org.apache.flink.core.execution.SavepointFormatType;
 
 import java.util.concurrent.CompletableFuture;
 
+/** Flink cluster client savepoint operations. */
 public abstract class FlinkClientTrait<T> {
 
     protected final ClusterClient<T> clusterClient;
@@ -37,9 +38,10 @@ public abstract class FlinkClientTrait<T> {
 
     public CompletableFuture<String> triggerSavepoint(
                                                       JobID jobID, String savepointDir, boolean nativeFormat) {
-        SavepointFormatType formatType =
-            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT;
-        return clusterClient.triggerSavepoint(jobID, savepointDir, formatType);
+        return clusterClient.triggerSavepoint(
+            jobID,
+            savepointDir,
+            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT);
     }
 
     public CompletableFuture<String> cancelWithSavepoint(JobID jobID, String savepointDir) {
@@ -48,9 +50,10 @@ public abstract class FlinkClientTrait<T> {
 
     public CompletableFuture<String> cancelWithSavepoint(
                                                          JobID jobID, String savepointDir, boolean nativeFormat) {
-        SavepointFormatType formatType =
-            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT;
-        return clusterClient.cancelWithSavepoint(jobID, savepointDir, formatType);
+        return clusterClient.cancelWithSavepoint(
+            jobID,
+            savepointDir,
+            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT);
     }
 
     public CompletableFuture<String> stopWithSavepoint(
@@ -64,9 +67,10 @@ public abstract class FlinkClientTrait<T> {
                                                        boolean advanceToEndOfEventTime,
                                                        String savepointDir,
                                                        boolean nativeFormat) {
-        SavepointFormatType formatType =
-            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT;
         return clusterClient.stopWithSavepoint(
-            jobID, advanceToEndOfEventTime, savepointDir, formatType);
+            jobID,
+            advanceToEndOfEventTime,
+            savepointDir,
+            nativeFormat ? SavepointFormatType.NATIVE : SavepointFormatType.DEFAULT);
     }
 }

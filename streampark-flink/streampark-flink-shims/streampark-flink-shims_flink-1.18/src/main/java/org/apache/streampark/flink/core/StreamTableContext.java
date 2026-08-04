@@ -18,12 +18,11 @@
 package org.apache.streampark.flink.core;
 
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.streaming.api.scala.StreamExecutionEnvironment;
-import org.apache.flink.table.api.bridge.scala.StreamTableEnvironment;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.bridge.java.StreamStatementSet;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 
-import scala.Tuple3;
-
-/** Integration api of stream and table */
+/** Flink 1.18 stream-table environment context. */
 public class StreamTableContext extends FlinkStreamTableTrait {
 
     public StreamTableContext(
@@ -33,17 +32,16 @@ public class StreamTableContext extends FlinkStreamTableTrait {
         super(parameter, streamEnv, tableEnv);
     }
 
-    public StreamTableContext(
-                              Tuple3<ParameterTool, StreamExecutionEnvironment, StreamTableEnvironment> args) {
-        this(args._1(), args._2(), args._3());
+    public StreamTableContext(FlinkTableInitializer.StreamTableInitResult init) {
+        this(init.parameter, init.streamEnv, init.streamTableEnv);
     }
 
-    public StreamTableContext(StreamTableEnvConfig args) {
-        this(FlinkTableInitializer.initialize(args));
+    public StreamTableContext(StreamTableEnvConfig config) {
+        this(FlinkTableInitializer.initialize(config));
     }
 
     @Override
-    public org.apache.flink.table.api.bridge.scala.StreamStatementSet createStatementSet() {
-        return tableEnv().createStatementSet();
+    public StreamStatementSet createStatementSet() {
+        return getStreamTableEnv().createStatementSet();
     }
 }

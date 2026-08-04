@@ -19,28 +19,39 @@ package org.apache.streampark.flink.core;
 
 import org.apache.streampark.common.conf.ConfigKeys;
 import org.apache.streampark.common.util.AssertUtils;
+import org.apache.streampark.common.util.StreamParkLoggerFactory;
+
+import org.apache.streampark.shaded.org.slf4j.Logger;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.ExecutionOptions;
-import org.apache.flink.table.api.StatementSet;
 import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.TableSchema;
+import org.apache.flink.types.Row;
 
-import java.lang.reflect.Field;
+import java.util.Arrays;
+import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
-/** Executes parsed Flink SQL statements against a table environment. */
+/** Executes Flink SQL statements. */
 public final class FlinkSqlExecutor {
+
+    private static final Logger LOG =
+        StreamParkLoggerFactory.loggerFactory()
+            .getLogger(FlinkSqlExecutor.class.getName());
 
     private static final ReentrantReadWriteLock.WriteLock LOCK =
         new ReentrantReadWriteLock().writeLock();
 
-    private static final Log LOG = new Log();
+    private static final Map<SqlCommand, CommandHandler> COMMAND_HANDLERS = buildCommandHandlers();
 
     private FlinkSqlExecutor() {
     }
@@ -49,32 +60,48 @@ public final class FlinkSqlExecutor {
         executeSql(sql, parameter, context, null);
     }
 
-    static void executeSql(
-                           String sql,
-                           ParameterTool parameter,
-                           TableEnvironment context,
-                           Consumer<String> callbackFunc) {
+    public static void executeSql(
+                                  String sql,
+                                  ParameterTool parameter,
+                                  TableEnvironment context,
+                                  Consumer<String> callbackFunc) {
+        String flinkSql = resolveSql(sql, parameter);
+        ExecutionContext ctx = new ExecutionContext(context, callbackFunc, parameter);
+        List<SqlCommandCall> calls = SqlCommandParser.parseSQL(flinkSql, null);
+        for (SqlCommandCall call : calls) {
+            processCommand(call, ctx);
+        }
+        finishExecution(flinkSql, ctx);
+    }
+
+    private static String resolveSql(String sql, ParameterTool parameter) {
         String flinkSql =
-            StringUtils.isBlank(sql) ? parameter.get(ConfigKeys.KEY_FLINK_SQL()) : parameter.get(sql);
+            StringUtils.isBlank(sql)
+                ? parameter.get(ConfigKeys.KEY_FLINK_SQL())
+                : parameter.get(sql);
         if (StringUtils.isBlank(flinkSql)) {
             throw new IllegalArgumentException("verify failed: flink sql cannot be empty");
         }
+        return flinkSql;
+    }
 
-        String runMode = parameter.get(ExecutionOptions.RUNTIME_MODE.key());
-        boolean hasInsert = false;
-        StatementSet statementSet = context.createStatementSet();
-        List<SqlCommandCall> commands = SqlCommandParser.parseSQL(flinkSql);
+    private static void processCommand(SqlCommandCall call, ExecutionContext ctx) {
+        COMMAND_HANDLERS.getOrDefault(call.command, FlinkSqlExecutor::executeDefault).handle(call, ctx);
+    }
 
-        for (SqlCommandCall call : commands) {
-            if (handleCommand(call, context, statementSet, callbackFunc, runMode)) {
-                hasInsert = true;
-            }
-        }
-
-        if (hasInsert) {
-            TableResult result = statementSet.execute();
-            if (result != null && result.getJobClient().isPresent()) {
-                LOG.info("jobId:" + result.getJobClient().get().getJobID());
+    private static void finishExecution(String flinkSql, ExecutionContext ctx) {
+        if (ctx.hasInsert) {
+            TableResult result = ctx.statementSet.execute();
+            if (result != null) {
+                result.getJobClient()
+                    .ifPresent(
+                        jobClient -> {
+                            try {
+                                LOG.info("jobId:{}", jobClient.getJobID());
+                            } catch (Exception ignored) {
+                                // ignore
+                            }
+                        });
             }
         } else {
             LOG.error("No 'INSERT' statement to trigger the execution of the Flink job.");
@@ -83,126 +110,141 @@ public final class FlinkSqlExecutor {
         }
 
         LOG.info(
-            "\n\n\n==============flinkSql==============\n\n " + flinkSql + "\n\n============================\n\n\n");
+            "\n\n\n==============flinkSql==============\n\n {}\n\n============================\n\n\n",
+            flinkSql);
     }
 
-    /**
-     * @return {@code true} when an INSERT statement was added to the statement set
-     */
-    private static boolean handleCommand(
-                                         SqlCommandCall call,
-                                         TableEnvironment context,
-                                         StatementSet statementSet,
-                                         Consumer<String> callbackFunc,
-                                         String runMode) {
-        String args = call.operands().length == 0 ? null : call.operands()[0];
-        String command = call.command().getCommandName();
-        switch (call.command()) {
-            case SHOW_CATALOGS:
-                callback(callbackFunc, command + ": " + String.join("\n", context.listCatalogs()));
-                return false;
-            case SHOW_CURRENT_CATALOG:
-                callback(callbackFunc, command + ": " + context.getCurrentCatalog());
-                return false;
-            case SHOW_DATABASES:
-                callback(callbackFunc, command + ": " + String.join("\n", context.listDatabases()));
-                return false;
-            case SHOW_CURRENT_DATABASE:
-                callback(callbackFunc, command + ": " + context.getCurrentDatabase());
-                return false;
-            case SHOW_TABLES:
-                callback(callbackFunc, command + ": " + listVisibleTables(context));
-                return false;
-            case SHOW_FUNCTIONS:
-                callback(
-                    callbackFunc,
-                    command + ": " + String.join("\n", context.listUserDefinedFunctions()));
-                return false;
-            case SHOW_MODULES:
-                callback(callbackFunc, command + ": " + String.join("\n", context.listModules()));
-                return false;
-            case DESC:
-            case DESCRIBE:
-                callback(callbackFunc, describeTable(context, args));
-                return false;
-            case EXPLAIN:
-                TableResult tableResult = context.executeSql(call.originSql());
-                String explain = tableResult.collect().next().getField(0).toString();
-                callback(callbackFunc, explain);
-                return false;
-            case SET:
-                String operand = call.operands()[1];
-                LOG.info(command + ": " + args + " --> " + operand);
-                context.getConfig().getConfiguration().setString(args, operand);
-                return false;
-            case RESET:
-            case RESET_ALL:
-                resetConfiguration(context, call.command(), args);
-                LOG.info(command + ": " + args);
-                return false;
-            case BEGIN_STATEMENT_SET:
-            case END_STATEMENT_SET:
-                LOG.warn("SQL Client Syntax: " + call.command().getCommandName());
-                return false;
-            case INSERT:
-                statementSet.addInsertSql(call.originSql());
-                return true;
-            case SELECT:
-                LOG.error("StreamPark dose not support 'SELECT' statement now!");
-                throw new UnsupportedOperationException(
-                    "StreamPark dose not support 'select' statement now!");
-            case DELETE:
-            case UPDATE:
-                AssertUtils.required(
-                    !"STREAMING".equals(runMode),
-                    "Currently, "
-                        + command.toUpperCase()
-                        + " statement only supports in batch mode, "
-                        + "and it requires the target table connector implements the SupportsRowLevelDelete, "
-                        + "For more details please refer to: https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/sql/"
-                        + command.toLowerCase());
-                return false;
-            default:
-                executeDefaultSql(context, call, command, args);
-                return false;
-        }
+    private static Map<SqlCommand, CommandHandler> buildCommandHandlers() {
+        Map<SqlCommand, CommandHandler> handlers = new EnumMap<>(SqlCommand.class);
+        handlers.put(SqlCommand.SHOW_CATALOGS,
+            (call, ctx) -> showMeta(call, ctx, joinLines(ctx.context.listCatalogs())));
+        handlers.put(
+            SqlCommand.SHOW_CURRENT_CATALOG,
+            (call, ctx) -> showMeta(call, ctx, ctx.context.getCurrentCatalog()));
+        handlers.put(
+            SqlCommand.SHOW_DATABASES,
+            (call, ctx) -> showMeta(call, ctx, joinLines(ctx.context.listDatabases())));
+        handlers.put(
+            SqlCommand.SHOW_CURRENT_DATABASE,
+            (call, ctx) -> showMeta(call, ctx, ctx.context.getCurrentDatabase()));
+        handlers.put(SqlCommand.SHOW_TABLES, FlinkSqlExecutor::showTables);
+        handlers.put(
+            SqlCommand.SHOW_FUNCTIONS,
+            (call, ctx) -> showMeta(call, ctx, joinLines(ctx.context.listUserDefinedFunctions())));
+        handlers.put(
+            SqlCommand.SHOW_MODULES,
+            (call, ctx) -> showMeta(call, ctx, joinLines(ctx.context.listModules())));
+        handlers.put(SqlCommand.DESC, FlinkSqlExecutor::describeTable);
+        handlers.put(SqlCommand.DESCRIBE, FlinkSqlExecutor::describeTable);
+        handlers.put(SqlCommand.EXPLAIN, FlinkSqlExecutor::explainSql);
+        handlers.put(SqlCommand.SET, FlinkSqlExecutor::setConfig);
+        handlers.put(SqlCommand.RESET, FlinkSqlExecutor::resetConfig);
+        handlers.put(SqlCommand.RESET_ALL, FlinkSqlExecutor::resetConfig);
+        handlers.put(SqlCommand.BEGIN_STATEMENT_SET, FlinkSqlExecutor::warnStatementSet);
+        handlers.put(SqlCommand.END_STATEMENT_SET, FlinkSqlExecutor::warnStatementSet);
+        handlers.put(SqlCommand.INSERT, FlinkSqlExecutor::addInsert);
+        handlers.put(SqlCommand.SELECT, FlinkSqlExecutor::rejectSelect);
+        handlers.put(SqlCommand.DELETE, FlinkSqlExecutor::validateBatchCommand);
+        handlers.put(SqlCommand.UPDATE, FlinkSqlExecutor::validateBatchCommand);
+        return handlers;
     }
 
-    private static String listVisibleTables(TableEnvironment context) {
-        StringBuilder tables = new StringBuilder();
-        for (String table : context.listTables()) {
-            if (!table.startsWith("UnnamedTable")) {
-                if (tables.length() > 0) {
-                    tables.append('\n');
-                }
-                tables.append(table);
-            }
-        }
-        return tables.toString();
+    private static void showMeta(SqlCommandCall call, ExecutionContext ctx, String payload) {
+        ctx.callback.accept(call.command.getName() + ": " + payload);
     }
 
-    private static String describeTable(TableEnvironment context, String args) {
-        var schema = context.scan(args).getSchema();
-        StringBuilder builder = new StringBuilder("Column\tType\n");
+    private static void showTables(SqlCommandCall call, ExecutionContext ctx) {
+        String tables =
+            Arrays.stream(ctx.context.listTables())
+                .filter(t -> !t.startsWith("UnnamedTable"))
+                .collect(Collectors.joining("\n"));
+        showMeta(call, ctx, tables);
+    }
+
+    private static void describeTable(SqlCommandCall call, ExecutionContext ctx) {
+        String args = firstOperand(call);
+        TableSchema schema = ctx.context.scan(args).getSchema();
+        StringBuilder builder = new StringBuilder();
+        builder.append("Column\tType\n");
         for (int i = 0; i <= schema.getFieldCount(); i++) {
-            builder
-                .append(schema.getFieldName(i).get())
-                .append('\t')
+            builder.append(schema.getFieldName(i).get())
+                .append("\t")
                 .append(schema.getFieldDataType(i).get())
-                .append('\n');
+                .append("\n");
         }
-        return builder.toString();
+        ctx.callback.accept(builder.toString());
     }
 
-    private static void executeDefaultSql(
-                                          TableEnvironment context,
-                                          SqlCommandCall call,
-                                          String command,
-                                          String args) {
-        LOCK.lock();
+    private static void explainSql(SqlCommandCall call, ExecutionContext ctx) {
+        TableResult tableResult = ctx.context.executeSql(call.originSql);
+        Row row = tableResult.collect().next();
+        ctx.callback.accept(row.getField(0).toString());
+    }
+
+    private static void setConfig(SqlCommandCall call, ExecutionContext ctx) {
+        AssertUtils.required(
+            call.operands != null && call.operands.length >= 2,
+            "SET command requires key and value operands");
+        String args = call.operands[0];
+        String operand = call.operands[1];
+        LOG.info("{}: {} --> {}", call.command.getName(), args, operand);
+        ctx.context.getConfig().getConfiguration().setString(args, operand);
+    }
+
+    private static void resetConfig(SqlCommandCall call, ExecutionContext ctx) {
+        String args = firstOperand(call);
         try {
-            context.executeSql(call.originSql());
-            LOG.info(command + ":" + args);
+            java.lang.reflect.Field confDataField =
+                Configuration.class.getDeclaredField("confData");
+            confDataField.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            HashMap<String, Object> confData =
+                (HashMap<String, Object>) confDataField.get(ctx.context.getConfig().getConfiguration());
+            synchronized (confData) {
+                if (call.command == SqlCommand.RESET) {
+                    confData.remove(args);
+                } else {
+                    confData.clear();
+                }
+            }
+            LOG.info("{}: {}", call.command.getName(), args);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException("Failed to reset Flink table configuration", e);
+        }
+    }
+
+    private static void warnStatementSet(SqlCommandCall call, ExecutionContext ctx) {
+        LOG.warn("SQL Client Syntax: {} ", call.command.getName());
+    }
+
+    private static void addInsert(SqlCommandCall call, ExecutionContext ctx) {
+        ctx.statementSet.addInsertSql(call.originSql);
+        ctx.hasInsert = true;
+    }
+
+    private static void rejectSelect(SqlCommandCall call, ExecutionContext ctx) {
+        LOG.error("StreamPark dose not support 'SELECT' statement now!");
+        throw new UnsupportedOperationException("StreamPark dose not support 'select' statement now!");
+    }
+
+    private static void validateBatchCommand(SqlCommandCall call, ExecutionContext ctx) {
+        String runMode = ctx.parameter.get(ExecutionOptions.RUNTIME_MODE.key());
+        AssertUtils.required(
+            !"STREAMING".equals(runMode),
+            "Currently, "
+                + call.command.getName().toUpperCase()
+                + " statement only supports in batch mode, "
+                + "and it requires the target table connector implements the SupportsRowLevelDelete, "
+                + "For more details please refer to: https://nightlies.apache.org/flink/flink-docs-release-1.18/docs/dev/table/sql/"
+                + call.command.getName());
+    }
+
+    private static void executeDefault(SqlCommandCall call, ExecutionContext ctx) {
+        String args = firstOperand(call);
+        try {
+            LOCK.lock();
+            ctx.context.executeSql(call.originSql);
+            LOG.info("{}:{}", call.command.getName(), args);
         } finally {
             if (LOCK.isHeldByCurrentThread()) {
                 LOCK.unlock();
@@ -210,47 +252,42 @@ public final class FlinkSqlExecutor {
         }
     }
 
-    private static void callback(Consumer<String> callbackFunc, String message) {
-        if (callbackFunc == null) {
-            LOG.info(message);
-        } else {
-            callbackFunc.accept(message);
-        }
+    private static String firstOperand(SqlCommandCall call) {
+        return call.operands.length == 0 ? null : call.operands[0];
     }
 
-    private static void resetConfiguration(TableEnvironment context, SqlCommand command, String args) {
-        try {
-            Field confDataField = Configuration.class.getDeclaredField("confData");
-            confDataField.setAccessible(true);
-            Object confDataObject = confDataField.get(context.getConfig().getConfiguration());
-            if (!(confDataObject instanceof Map)) {
-                throw new IllegalStateException("Unexpected Flink configuration internal structure");
-            }
-            Map<?, ?> confData = (Map<?, ?>) confDataObject;
-            synchronized (confData) {
-                if (command == SqlCommand.RESET) {
-                    confData.remove(args);
-                } else {
-                    confData.clear();
-                }
-            }
-        } catch (ReflectiveOperationException e) {
-            throw new IllegalStateException("Failed to reset table configuration", e);
-        }
+    private static String joinLines(String[] values) {
+        return String.join("\n", values);
     }
 
-    private static final class Log extends org.apache.streampark.common.util.LoggerSupport {
+    @FunctionalInterface
+    private interface CommandHandler {
 
-        void info(String msg) {
-            logInfo(msg);
-        }
+        void handle(SqlCommandCall call, ExecutionContext ctx);
+    }
 
-        void warn(String msg) {
-            logWarn(msg);
-        }
+    private static final class ExecutionContext {
 
-        void error(String msg) {
-            logError(msg);
+        private final TableEnvironment context;
+        private final Consumer<String> callback;
+        private final ParameterTool parameter;
+        private final org.apache.flink.table.api.StatementSet statementSet;
+        private boolean hasInsert;
+
+        private ExecutionContext(
+                                 TableEnvironment context, Consumer<String> callbackFunc,
+                                 ParameterTool parameter) {
+            this.context = context;
+            this.parameter = parameter;
+            this.statementSet = context.createStatementSet();
+            this.callback =
+                r -> {
+                    if (callbackFunc != null) {
+                        callbackFunc.accept(r);
+                    } else {
+                        LOG.info(r);
+                    }
+                };
         }
     }
 }

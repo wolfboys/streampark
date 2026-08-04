@@ -31,8 +31,8 @@ import java.util.Map;
 import java.util.Scanner;
 import java.util.Set;
 
-/** Splits multi-statement Flink SQL scripts into segments with line numbers. */
-final class SqlSplitter {
+/** Splits multi-statement Flink SQL scripts into individual segments. */
+public final class SqlSplitter {
 
     private static final Set<String> SINGLE_LINE_COMMENT_PREFIX_LIST;
 
@@ -45,10 +45,117 @@ final class SqlSplitter {
     private SqlSplitter() {
     }
 
-    static List<SqlSegment> splitSql(String sql) {
-        QueryExtractor extractor = new QueryExtractor(sql);
-        Map<Integer, String> refinedQueries = refineQueries(extractor.queries());
-        return buildSegments(refinedQueries, extractor.lineNumMap());
+    /**
+     * Split whole text into multiple sql statements. Two Steps: Step 1, split the whole text into
+     * multiple sql statements. Step 2, refine the results. Replace the preceding sql statements with
+     * empty lines, so that we can get the correct line number in the parsing error message.
+     */
+    public static List<SqlSegment> splitSql(String sql) {
+        Map<Integer, Boolean> lineDescriptor = buildLineDescriptor(sql);
+        Map<Integer, int[]> lineNumMap = new HashMap<>();
+        List<String> queries = splitRawQueries(sql, lineDescriptor, lineNumMap);
+        Map<Integer, String> refinedQueries = refineQueries(queries);
+        return toSegments(refinedQueries, lineNumMap);
+    }
+
+    private static List<String> splitRawQueries(
+                                                String sql, Map<Integer, Boolean> lineDescriptor,
+                                                Map<Integer, int[]> lineNumMap) {
+        List<String> queries = new ArrayList<>();
+        if (StringUtils.isBlank(sql)) {
+            return queries;
+        }
+
+        int lastIndex = sql.length() - 1;
+        StringBuilder query = new StringBuilder();
+        ParseState state = new ParseState();
+
+        for (int idx = 0; idx < sql.length(); idx++) {
+            if (sql.charAt(idx) == '\n') {
+                state.lineNum++;
+            }
+            char ch = sql.charAt(idx);
+            processCharacter(
+                sql, idx, lastIndex, ch, query, queries, state, lineDescriptor, lineNumMap);
+        }
+        return queries;
+    }
+
+    private static void processCharacter(
+                                         String sql,
+                                         int idx,
+                                         int lastIndex,
+                                         char ch,
+                                         StringBuilder query,
+                                         List<String> queries,
+                                         ParseState state,
+                                         Map<Integer, Boolean> lineDescriptor,
+                                         Map<Integer, int[]> lineNumMap) {
+        if (state.endSingleLineComment(ch)) {
+            query.append(ch);
+            appendTrailingQuery(query, queries, idx, lastIndex);
+            return;
+        }
+
+        state.endMultiLineComment(sql, idx);
+        state.toggleQuoteState(ch, idx);
+        state.startCommentIfNeeded(sql, idx, lastIndex);
+
+        if (state.isStatementDelimiter(ch)) {
+            finishStatement(query, queries, state, lineDescriptor, lineNumMap);
+            return;
+        }
+
+        if (idx == lastIndex) {
+            finishLastCharacter(sql, idx, lastIndex, ch, query, queries, state, lineDescriptor, lineNumMap);
+            return;
+        }
+
+        if (state.shouldAppendChar(ch)) {
+            query.append(ch);
+        } else if (ch == '\n') {
+            query.append(ch);
+        }
+    }
+
+    private static void appendTrailingQuery(
+                                            StringBuilder query, List<String> queries, int idx, int lastIndex) {
+        if (idx == lastIndex && StringUtils.isNotBlank(query.toString().trim())) {
+            queries.add(query.toString());
+        }
+    }
+
+    private static void finishStatement(
+                                        StringBuilder query,
+                                        List<String> queries,
+                                        ParseState state,
+                                        Map<Integer, Boolean> lineDescriptor,
+                                        Map<Integer, int[]> lineNumMap) {
+        markLineNumber(state.lineNum, lineDescriptor, lineNumMap);
+        if (StringUtils.isNotBlank(query.toString().trim())) {
+            queries.add(query.toString());
+        }
+        query.setLength(0);
+    }
+
+    private static void finishLastCharacter(
+                                            String sql,
+                                            int idx,
+                                            int lastIndex,
+                                            char ch,
+                                            StringBuilder query,
+                                            List<String> queries,
+                                            ParseState state,
+                                            Map<Integer, Boolean> lineDescriptor,
+                                            Map<Integer, int[]> lineNumMap) {
+        markLineNumber(state.lineNum, lineDescriptor, lineNumMap);
+        if (!state.singleLineComment && !state.multiLineComment) {
+            query.append(ch);
+        }
+        if (StringUtils.isNotBlank(query.toString().trim())) {
+            queries.add(query.toString());
+        }
+        query.setLength(0);
     }
 
     private static Map<Integer, String> refineQueries(List<String> queries) {
@@ -56,201 +163,77 @@ final class SqlSplitter {
         for (int i = 0; i < queries.size(); i++) {
             String currStatement = queries.get(i);
             if (isSingleLineComment(currStatement) || isMultipleLineComment(currStatement)) {
-                mergeCommentIntoPrevious(refinedQueries, currStatement);
+                appendCommentLineBreaks(refinedQueries, currStatement);
             } else {
-                appendStatement(refinedQueries, i, currStatement);
+                refinedQueries.put(
+                    refinedQueries.size(),
+                    leadingLineBreaks(refinedQueries, i) + currStatement);
             }
         }
         return refinedQueries;
     }
 
-    private static void mergeCommentIntoPrevious(Map<Integer, String> refinedQueries, String comment) {
-        if (!refinedQueries.isEmpty()) {
-            int lastKey = refinedQueries.size() - 1;
-            refinedQueries.put(lastKey, refinedQueries.get(lastKey) + extractLineBreaks(comment));
+    private static void appendCommentLineBreaks(Map<Integer, String> refinedQueries, String currStatement) {
+        if (refinedQueries.isEmpty()) {
+            return;
         }
+        int lastKey = refinedQueries.size() - 1;
+        refinedQueries.put(lastKey, refinedQueries.get(lastKey) + extractLineBreaks(currStatement));
     }
 
-    private static void appendStatement(
-                                        Map<Integer, String> refinedQueries,
-                                        int index,
-                                        String statement) {
-        String linesPlaceholder = "";
-        if (index > 0) {
-            linesPlaceholder = extractLineBreaks(refinedQueries.get(index - 1));
+    private static String leadingLineBreaks(Map<Integer, String> refinedQueries, int index) {
+        if (index == 0) {
+            return "";
         }
-        refinedQueries.put(refinedQueries.size(), linesPlaceholder + statement);
+        return extractLineBreaks(refinedQueries.get(index - 1));
     }
 
-    private static String extractLineBreaks(String text) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < text.length(); i++) {
-            if (text.charAt(i) == '\n') {
-                builder.append('\n');
-            }
-        }
-        return builder.toString();
-    }
-
-    private static List<SqlSegment> buildSegments(
-                                                  Map<Integer, String> refinedQueries,
-                                                  Map<Integer, int[]> lineNumMap) {
+    private static List<SqlSegment> toSegments(
+                                               Map<Integer, String> refinedQueries, Map<Integer, int[]> lineNumMap) {
         List<SqlSegment> segments = new ArrayList<>();
         for (Map.Entry<Integer, String> entry : refinedQueries.entrySet()) {
             int[] line = lineNumMap.get(entry.getKey());
             segments.add(new SqlSegment(line[0], line[1], entry.getValue()));
         }
-        segments.sort(Comparator.comparingInt(SqlSegment::start));
+        segments.sort(Comparator.comparingInt(a -> a.start));
         return segments;
     }
 
-    private static boolean isSingleLineComment(String text) {
-        return text.trim().startsWith(ConfigKeys.PARAM_PREFIX());
-    }
+    private static final class ParseState {
 
-    private static boolean isMultipleLineComment(String text) {
-        return text.trim().startsWith("/*") && text.trim().endsWith("*/");
-    }
-
-    private static boolean isSingleLineComment(char curChar, char nextChar) {
-        for (String prefix : SINGLE_LINE_COMMENT_PREFIX_LIST) {
-            if (prefix.length() == 1 && curChar == prefix.charAt(0)) {
-                return true;
-            }
-            if (prefix.length() == 2
-                && curChar == prefix.charAt(0)
-                && nextChar == prefix.charAt(1)) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static final class QueryExtractor {
-
-        private final String sql;
-        private final int lastIndex;
-        private final Map<Integer, int[]> lineNumMap = new HashMap<>();
-        private final Map<Integer, Boolean> lineDescriptor;
-        private final List<String> queries = new ArrayList<>();
-
-        private final StringBuilder query = new StringBuilder();
         private boolean multiLineComment;
         private boolean singleLineComment;
         private boolean singleQuoteString;
         private boolean doubleQuoteString;
         private int lineNum;
 
-        private QueryExtractor(String sql) {
-            this.sql = sql;
-            this.lastIndex = StringUtils.isNotBlank(sql) ? sql.length() - 1 : 0;
-            this.lineDescriptor = buildLineDescriptor(sql);
-            for (int idx = 0; idx < sql.length(); idx++) {
-                processCharacter(idx);
+        private boolean endSingleLineComment(char ch) {
+            if (singleLineComment && ch == '\n') {
+                singleLineComment = false;
+                return true;
             }
+            return false;
         }
 
-        private List<String> queries() {
-            return queries;
-        }
-
-        private Map<Integer, int[]> lineNumMap() {
-            return lineNumMap;
-        }
-
-        private static Map<Integer, Boolean> buildLineDescriptor(String sql) {
-            Map<Integer, Boolean> descriptor = new HashMap<>();
-            Scanner scanner = new Scanner(sql);
-            int lineNumber = 0;
-            boolean startComment = false;
-            boolean hasComment = false;
-
-            while (scanner.hasNextLine()) {
-                lineNumber++;
-                String line = scanner.nextLine().trim();
-                boolean nonEmpty =
-                    StringUtils.isNotBlank(line) && !line.startsWith(ConfigKeys.PARAM_PREFIX());
-                if (line.startsWith("/*")) {
-                    startComment = true;
-                    hasComment = true;
-                }
-                descriptor.put(lineNumber, nonEmpty && !hasComment);
-                if (startComment && line.endsWith("*/")) {
-                    startComment = false;
-                    hasComment = false;
-                }
-            }
-            scanner.close();
-            return descriptor;
-        }
-
-        private static int findStartLine(int num, Map<Integer, Boolean> lineDescriptor) {
-            if (num >= lineDescriptor.size() || Boolean.TRUE.equals(lineDescriptor.get(num))) {
-                return num;
-            }
-            return findStartLine(num + 1, lineDescriptor);
-        }
-
-        private static void markLineNumber(
-                                           int lineNum,
-                                           Map<Integer, int[]> lineNumMap,
-                                           Map<Integer, Boolean> lineDescriptor) {
-            int line = lineNum + 1;
-            if (lineNumMap.isEmpty()) {
-                lineNumMap.put(0, new int[]{findStartLine(1, lineDescriptor), line});
-            } else {
-                int index = lineNumMap.size();
-                int start = lineNumMap.get(lineNumMap.size() - 1)[1] + 1;
-                lineNumMap.put(index, new int[]{findStartLine(start, lineDescriptor), line});
-            }
-        }
-
-        private static boolean hasNonBlankQuery(StringBuilder query) {
-            return !query.toString().trim().isEmpty();
-        }
-
-        private void processCharacter(int idx) {
-            if (sql.charAt(idx) == '\n') {
-                lineNum++;
-            }
-            char ch = sql.charAt(idx);
-            if (handleSingleLineCommentEnd(idx, ch)) {
-                return;
-            }
-            updateMultiLineCommentEnd(idx);
-            updateQuoteState(idx, ch);
-            updateCommentStart(idx);
-            handleStatementBoundary(idx, ch);
-        }
-
-        private boolean handleSingleLineCommentEnd(int idx, char ch) {
-            if (!singleLineComment || ch != '\n') {
-                return false;
-            }
-            singleLineComment = false;
-            query.append(ch);
-            if (idx == lastIndex && hasNonBlankQuery(query)) {
-                queries.add(query.toString());
-            }
-            return true;
-        }
-
-        private void updateMultiLineCommentEnd(int idx) {
-            if (multiLineComment && idx - 1 >= 0 && sql.charAt(idx - 1) == '/'
-                && idx - 2 >= 0 && sql.charAt(idx - 2) == '*') {
+        private void endMultiLineComment(String sql, int idx) {
+            if (multiLineComment
+                && idx - 1 >= 0
+                && sql.charAt(idx - 1) == '/'
+                && idx - 2 >= 0
+                && sql.charAt(idx - 2) == '*') {
                 multiLineComment = false;
             }
         }
 
-        private void updateQuoteState(int idx, char ch) {
-            if (ch == '\'' && !singleLineComment && !multiLineComment) {
+        private void toggleQuoteState(char ch, int idx) {
+            if (ch == '\'' && !(singleLineComment || multiLineComment)) {
                 if (singleQuoteString) {
                     singleQuoteString = false;
                 } else if (!doubleQuoteString) {
                     singleQuoteString = true;
                 }
             }
-            if (ch == '"' && !singleLineComment && !multiLineComment) {
+            if (ch == '"' && !(singleLineComment || multiLineComment)) {
                 if (doubleQuoteString && idx > 0) {
                     doubleQuoteString = false;
                 } else if (!singleQuoteString) {
@@ -259,8 +242,11 @@ final class SqlSplitter {
             }
         }
 
-        private void updateCommentStart(int idx) {
-            if (singleQuoteString || doubleQuoteString || multiLineComment || singleLineComment
+        private void startCommentIfNeeded(String sql, int idx, int lastIndex) {
+            if (singleQuoteString
+                || doubleQuoteString
+                || multiLineComment
+                || singleLineComment
                 || idx >= lastIndex) {
                 return;
             }
@@ -274,37 +260,104 @@ final class SqlSplitter {
             }
         }
 
-        private void handleStatementBoundary(int idx, char ch) {
-            if (ch == ';' && !singleQuoteString && !doubleQuoteString && !multiLineComment
-                && !singleLineComment) {
-                markLineNumber(lineNum, lineNumMap, lineDescriptor);
-                if (hasNonBlankQuery(query)) {
-                    queries.add(query.toString());
-                    query.setLength(0);
-                }
-                return;
-            }
-            if (idx == lastIndex) {
-                handleLastCharacter(ch);
-                return;
-            }
-            appendNonCommentCharacter(ch);
+        private boolean isStatementDelimiter(char ch) {
+            return ch == ';'
+                && !singleQuoteString
+                && !doubleQuoteString
+                && !multiLineComment
+                && !singleLineComment;
         }
 
-        private void handleLastCharacter(char ch) {
-            markLineNumber(lineNum, lineNumMap, lineDescriptor);
-            if (!singleLineComment && !multiLineComment) {
-                query.append(ch);
-            }
-            if (hasNonBlankQuery(query)) {
-                queries.add(query.toString());
-            }
+        private boolean shouldAppendChar(char ch) {
+            return !singleLineComment && !multiLineComment;
         }
+    }
 
-        private void appendNonCommentCharacter(char ch) {
-            if (!singleLineComment && !multiLineComment || ch == '\n') {
-                query.append(ch);
+    private static Map<Integer, Boolean> buildLineDescriptor(String sql) {
+        Map<Integer, Boolean> descriptor = new HashMap<>();
+        Scanner scanner = new Scanner(sql);
+        int lineNumber = 0;
+        boolean startComment = false;
+        boolean hasComment = false;
+
+        while (scanner.hasNextLine()) {
+            lineNumber++;
+            String line = scanner.nextLine().trim();
+            boolean nonEmpty =
+                StringUtils.isNotBlank(line) && !line.startsWith(ConfigKeys.PARAM_PREFIX());
+            if (line.startsWith("/*")) {
+                startComment = true;
+                hasComment = true;
+            }
+
+            descriptor.put(lineNumber, nonEmpty && !hasComment);
+
+            if (startComment && line.endsWith("*/")) {
+                startComment = false;
+                hasComment = false;
             }
         }
+        scanner.close();
+        return descriptor;
+    }
+
+    private static int findStartLine(int num, Map<Integer, Boolean> lineDescriptor) {
+        if (num >= lineDescriptor.size() || Boolean.TRUE.equals(lineDescriptor.get(num))) {
+            return num;
+        }
+        return findStartLine(num + 1, lineDescriptor);
+    }
+
+    private static void markLineNumber(
+                                       int lineNum, Map<Integer, Boolean> lineDescriptor,
+                                       Map<Integer, int[]> lineNumMap) {
+        int line = lineNum + 1;
+        if (lineNumMap.isEmpty()) {
+            lineNumMap.put(0, new int[]{findStartLine(1, lineDescriptor), line});
+        } else {
+            int index = lineNumMap.size();
+            int[] previous = lineNumMap.get(lineNumMap.size() - 1);
+            int start = previous[1] + 1;
+            lineNumMap.put(index, new int[]{findStartLine(start, lineDescriptor), line});
+        }
+    }
+
+    private static String extractLineBreaks(String text) {
+        StringBuilder builder = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            if (text.charAt(i) == '\n') {
+                builder.append('\n');
+            }
+        }
+        return builder.toString();
+    }
+
+    private static boolean isSingleLineComment(String text) {
+        return text.trim().startsWith(ConfigKeys.PARAM_PREFIX());
+    }
+
+    private static boolean isMultipleLineComment(String text) {
+        return text.trim().startsWith("/*") && text.trim().endsWith("*/");
+    }
+
+    private static boolean isSingleLineComment(char curChar, char nextChar) {
+        for (String singleCommentPrefix : SINGLE_LINE_COMMENT_PREFIX_LIST) {
+            switch (singleCommentPrefix.length()) {
+                case 1:
+                    if (curChar == singleCommentPrefix.charAt(0)) {
+                        return true;
+                    }
+                    break;
+                case 2:
+                    if (curChar == singleCommentPrefix.charAt(0)
+                        && nextChar == singleCommentPrefix.charAt(1)) {
+                        return true;
+                    }
+                    break;
+                default:
+                    break;
+            }
+        }
+        return false;
     }
 }

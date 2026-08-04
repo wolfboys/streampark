@@ -19,50 +19,39 @@ package org.apache.streampark.flink.core;
 
 import org.apache.streampark.common.enums.FlinkSqlValidationFailedType;
 
-/** Result of Flink SQL validation (Scala case-class compatible). */
+/** Flink SQL validation result. */
 public class FlinkSqlValidationResult {
 
-    private boolean success = true;
-    private FlinkSqlValidationFailedType failedType;
-    private int lineStart;
-    private int lineEnd;
-    private int errorLine;
-    private int errorColumn;
-    private String sql;
-    private String exception;
+    public final boolean success;
+    public final FlinkSqlValidationFailedType failedType;
+    public final int lineStart;
+    public final int lineEnd;
+    public final int errorLine;
+    public final int errorColumn;
+    public final String sql;
+    public final String exception;
 
-    /** Default success result; mirrors the Scala case-class no-arg constructor. */
-    public FlinkSqlValidationResult() {
-        // Intentionally empty: fields default to a successful validation result.
+    private FlinkSqlValidationResult(Builder builder) {
+        this.success = builder.success;
+        this.failedType = builder.failedType;
+        this.lineStart = builder.lineStart;
+        this.lineEnd = builder.lineEnd;
+        this.errorLine = builder.errorLine;
+        this.errorColumn = builder.errorColumn;
+        this.sql = builder.sql;
+        this.exception = builder.exception;
     }
 
-    /** Builds a failed validation result without exposing an oversized public constructor. */
-    public static FlinkSqlValidationResult failure(
-                                                   FlinkSqlValidationFailedType failedType,
-                                                   int lineStart,
-                                                   int lineEnd,
-                                                   int errorLine,
-                                                   int errorColumn,
-                                                   String sql,
-                                                   String exception) {
-        FlinkSqlValidationResult result = new FlinkSqlValidationResult();
-        result.success = false;
-        result.failedType = failedType;
-        result.lineStart = lineStart;
-        result.lineEnd = lineEnd;
-        result.errorLine = errorLine;
-        result.errorColumn = errorColumn;
-        result.sql = sql;
-        result.exception = exception;
-        return result;
+    public static Builder builder() {
+        return new Builder();
     }
 
-    /** Scala field-style access. */
+    /** Create a successful validation result with default values. */
+    public static FlinkSqlValidationResult ok() {
+        return builder().build();
+    }
+
     public boolean success() {
-        return success;
-    }
-
-    public boolean isSuccess() {
         return success;
     }
 
@@ -70,15 +59,7 @@ public class FlinkSqlValidationResult {
         return failedType;
     }
 
-    public FlinkSqlValidationFailedType getFailedType() {
-        return failedType;
-    }
-
     public int lineStart() {
-        return lineStart;
-    }
-
-    public int getLineStart() {
         return lineStart;
     }
 
@@ -86,15 +67,7 @@ public class FlinkSqlValidationResult {
         return lineEnd;
     }
 
-    public int getLineEnd() {
-        return lineEnd;
-    }
-
     public int errorLine() {
-        return errorLine;
-    }
-
-    public int getErrorLine() {
         return errorLine;
     }
 
@@ -102,15 +75,7 @@ public class FlinkSqlValidationResult {
         return errorColumn;
     }
 
-    public int getErrorColumn() {
-        return errorColumn;
-    }
-
     public String sql() {
-        return sql;
-    }
-
-    public String getSql() {
         return sql;
     }
 
@@ -118,47 +83,60 @@ public class FlinkSqlValidationResult {
         return exception;
     }
 
-    public String getException() {
-        return exception;
-    }
+    /** Builder for {@link FlinkSqlValidationResult}. */
+    public static class Builder {
 
-    public FlinkSqlValidationResult withSuccess(boolean success) {
-        this.success = success;
-        return this;
-    }
+        private boolean success = true;
+        private FlinkSqlValidationFailedType failedType;
+        private int lineStart;
+        private int lineEnd;
+        private int errorLine;
+        private int errorColumn;
+        private String sql;
+        private String exception;
 
-    public FlinkSqlValidationResult withFailedType(FlinkSqlValidationFailedType failedType) {
-        this.failedType = failedType;
-        return this;
-    }
+        public Builder success(boolean success) {
+            this.success = success;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withLineStart(int lineStart) {
-        this.lineStart = lineStart;
-        return this;
-    }
+        public Builder failedType(FlinkSqlValidationFailedType failedType) {
+            this.failedType = failedType;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withLineEnd(int lineEnd) {
-        this.lineEnd = lineEnd;
-        return this;
-    }
+        public Builder lineStart(int lineStart) {
+            this.lineStart = lineStart;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withErrorLine(int errorLine) {
-        this.errorLine = errorLine;
-        return this;
-    }
+        public Builder lineEnd(int lineEnd) {
+            this.lineEnd = lineEnd;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withErrorColumn(int errorColumn) {
-        this.errorColumn = errorColumn;
-        return this;
-    }
+        public Builder errorLine(int errorLine) {
+            this.errorLine = errorLine;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withSql(String sql) {
-        this.sql = sql;
-        return this;
-    }
+        public Builder errorColumn(int errorColumn) {
+            this.errorColumn = errorColumn;
+            return this;
+        }
 
-    public FlinkSqlValidationResult withException(String exception) {
-        this.exception = exception;
-        return this;
+        public Builder sql(String sql) {
+            this.sql = sql;
+            return this;
+        }
+
+        public Builder exception(String exception) {
+            this.exception = exception;
+            return this;
+        }
+
+        public FlinkSqlValidationResult build() {
+            return new FlinkSqlValidationResult(this);
+        }
     }
 }

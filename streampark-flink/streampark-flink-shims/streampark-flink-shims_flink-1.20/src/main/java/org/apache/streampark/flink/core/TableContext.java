@@ -20,19 +20,18 @@ package org.apache.streampark.flink.core;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.table.api.TableEnvironment;
 
-import scala.Tuple2;
-
+/** Flink 1.20 table environment context. */
 public class TableContext extends FlinkTableTrait {
 
     public TableContext(ParameterTool parameter, TableEnvironment tableEnv) {
         super(parameter, tableEnv);
     }
 
-    public TableContext(Tuple2<ParameterTool, TableEnvironment> args) {
-        this(args._1(), args._2());
+    public TableContext(FlinkTableInitializer.TableInitResult init) {
+        this(init.parameter, init.tableEnv);
     }
 
-    public TableContext(TableEnvConfig args) {
-        this(FlinkTableInitializer.initialize(args));
+    public TableContext(TableEnvConfig config) {
+        this(FlinkTableInitializer.initialize(config));
     }
 }
